@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import onnxruntime as ort
 from pydantic import BaseModel
-from app.audio_utils import load_waveform
+import soundfile as sf
+from app.audio_utils import load_waveform, waveform_to_mel_profile_batch
 from app.inference_pipeline import (
     analyze_waveform_pipeline,
     apply_vad_to_waveform as pipeline_apply_vad_to_waveform,
@@ -55,6 +56,12 @@ ALLOWED_YOUTUBE_HOSTNAMES = {
     'music.youtube.com',
     'youtu.be',
 }
+
+# ── Audio limits ──────────────────────────────────────────────────────────────
+MAX_FILE_SIZE_BYTES      = 50 * 1024 * 1024   # 50 MB hard cap for uploads
+MAX_AUDIO_DURATION_SEC   = 300.0              # 5 minutes — both upload and YouTube
+MIN_AUDIO_DURATION_SEC   = 2.0               # shorter than this gets a soft warning
+
 try:
     _sess_opts = ort.SessionOptions()
     # Suppress benign shape-mismatch warnings that appear when batching chunks
@@ -65,6 +72,9 @@ try:
     print("ONNX Model loaded successfully into memory.")
 except Exception as e:
     print(f"Error loading ONNX model: {e}")
+
+# ── In-memory audio cache (stores the last analysed waveform for chunk playback) ──
+_audio_cache: dict = {"waveform": None, "sr": None}
 
 
 class YouTubeRequest(BaseModel):
@@ -80,6 +90,42 @@ def validate_youtube_url(url: str) -> None:
             detail="Please provide a valid YouTube link from youtube.com or youtu.be.",
         )
 
+
+def validate_file_size(audio_bytes: bytes) -> None:
+    """Reject uploads that exceed the hard file-size cap before any decoding."""
+    size_mb = len(audio_bytes) / (1024 * 1024)
+    if len(audio_bytes) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File too large ({size_mb:.1f} MB). "
+                f"Maximum allowed size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB."
+            ),
+        )
+
+
+def validate_audio_duration(waveform: np.ndarray, sample_rate: int) -> str | None:
+    """Check audio duration against hard and soft limits.
+
+    Returns a non-None warning string if the audio is suspiciously short
+    (soft limit), or raises HTTP 400 if it exceeds the hard maximum.
+    """
+    duration_sec = len(waveform) / sample_rate
+    if duration_sec > MAX_AUDIO_DURATION_SEC:
+        mins = MAX_AUDIO_DURATION_SEC / 60
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Audio is {duration_sec / 60:.1f} min long. "
+                f"Maximum supported duration is {mins:.0f} minutes."
+            ),
+        )
+    if duration_sec < MIN_AUDIO_DURATION_SEC:
+        return (
+            f"Audio is very short ({duration_sec:.2f}s). "
+            "Results may be unreliable for clips under 2 seconds."
+        )
+    return None
 
 def generate_spectrogram_b64(waveform: np.ndarray, sample_rate: int) -> str | None:
     """Render a full-length mel spectrogram of the waveform as a base64 PNG.
@@ -153,7 +199,12 @@ async def predict_audio(
 
     try:
         audio_bytes = await file.read()
+        validate_file_size(audio_bytes)
         waveform, sample_rate = load_waveform(audio_bytes)
+        # Cache for chunk playback
+        _audio_cache["waveform"] = waveform
+        _audio_cache["sr"] = sample_rate
+        duration_warning = validate_audio_duration(waveform, sample_rate)
 
         # Run inference and spectrogram generation concurrently
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -177,6 +228,8 @@ async def predict_audio(
         response["filename"] = file.filename
         response["prediction"] = response["binary_prediction"]
         response["spectrogram_b64"] = spectrogram_b64
+        if duration_warning:
+            response["duration_warning"] = duration_warning
         response["confidence_band_thresholds"] = {
             "human_max": round(confidence_low, 2),
             "ai_min": round(confidence_high, 2),
@@ -282,6 +335,13 @@ async def predict_youtube_stream(
             # 2. Load waveform
             waveform, sample_rate = await asyncio.to_thread(load_waveform, audio_bytes)
 
+            # Duration guard — runs synchronously (just arithmetic, no I/O)
+            duration_warning = validate_audio_duration(waveform, sample_rate)
+
+            # Cache waveform for chunk playback
+            _audio_cache["waveform"] = waveform
+            _audio_cache["sr"] = sample_rate
+
             yield sse({"stage": "vad", "label": "Detecting speech segments (VAD)…", "pct": 48})
 
             # 3. VAD
@@ -296,15 +356,16 @@ async def predict_youtube_stream(
 
             yield sse({"stage": "inference", "label": f"Running AI analysis on {len(chunks)} chunks…", "pct": 62})
 
-            # 5. Inference + spectrogram concurrently
-            inference_task = asyncio.to_thread(pipeline_score_waveforms, ort_session, chunks)
-            spectrogram_task = asyncio.to_thread(generate_spectrogram_b64, waveform, sample_rate)
+            # 5. Inference + spectrogram + mel profiles — all concurrent
+            inference_task    = asyncio.to_thread(pipeline_score_waveforms, ort_session, chunks)
+            spectrogram_task  = asyncio.to_thread(generate_spectrogram_b64, waveform, sample_rate)
+            mel_task          = asyncio.to_thread(waveform_to_mel_profile_batch, chunks)
 
             chunk_scores = await inference_task
 
             yield sse({"stage": "spectrogram", "label": "Generating mel spectrogram…", "pct": 88})
 
-            spectrogram_b64 = await spectrogram_task
+            spectrogram_b64, chunk_mel_profiles = await asyncio.gather(spectrogram_task, mel_task)
 
             # 6. Summarise
             summary = pipeline_summarize_scores(
@@ -342,6 +403,8 @@ async def predict_youtube_stream(
                 "vad_summary": vad_summary,
                 **summary,
                 "spectrogram_b64": spectrogram_b64,
+                "chunk_mel_profiles": chunk_mel_profiles,
+                **(({"duration_warning": duration_warning}) if duration_warning else {}),
                 "confidence_band_thresholds": {
                     "human_max": round(confidence_low, 2),
                     "ai_min": round(confidence_high, 2),
@@ -369,4 +432,47 @@ async def predict_youtube_stream(
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+# ── Lightweight segment-playback endpoint ────────────────────────────────────
+
+@app.get("/audio/segment/")
+async def get_audio_segment(
+    start: float = Query(..., ge=0.0, description="Start time in seconds"),
+    end:   float = Query(..., gt=0.0, description="End time in seconds"),
+):
+    """Return a WAV slice of the last-analysed waveform for in-browser chunk playback.
+
+    Slices the in-memory cached waveform — no disk I/O, no re-download.
+    Only available after at least one prediction has been made in the current
+    server session.
+    """
+    if _audio_cache["waveform"] is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No audio cached. Run a prediction first, then request a segment.",
+        )
+
+    waveform = _audio_cache["waveform"]
+    sr       = _audio_cache["sr"]
+
+    total_duration = len(waveform) / sr
+    end = min(end, total_duration)
+    start_sample = int(start * sr)
+    end_sample   = int(end   * sr)
+
+    if start_sample >= end_sample or start_sample >= len(waveform):
+        raise HTTPException(status_code=400, detail="Invalid segment range.")
+
+    segment = waveform[start_sample:min(end_sample, len(waveform))]
+
+    buf = io.BytesIO()
+    sf.write(buf, segment, sr, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="audio/wav",
+        headers={"Content-Disposition": "inline; filename=segment.wav"},
     )

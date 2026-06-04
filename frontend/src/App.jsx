@@ -1,19 +1,15 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import './App.css'
 
 // ─── ConfidenceGauge ──────────────────────────────────────────────────────────
-// SVG semicircle gauge using stroke-dasharray/dashoffset for smooth animation.
-// Arc goes left→right through the top (0% = left / 9-o'clock, 100% = right / 3-o'clock).
 function ConfidenceGauge({ score, confidenceBand }) {
   const R = 78
   const CX = 110
   const CY = 108
-  const arcLength = Math.PI * R // ≈ 245
+  const arcLength = Math.PI * R
 
   const pct = Math.min(100, Math.max(0, score ?? 0))
-  // dashOffset shrinks the visible portion: 0 = full arc shown, arcLength = nothing shown
   const dashOffset = arcLength * (1 - pct / 100)
-
   const color = pct < 30 ? '#10b981' : pct < 90 ? '#f59e0b' : '#f43f5e'
   const bandClass = pct < 30 ? 'human' : pct < 90 ? 'uncertain' : 'ai'
 
@@ -29,50 +25,15 @@ function ConfidenceGauge({ score, confidenceBand }) {
             </feMerge>
           </filter>
         </defs>
-        {/* Track */}
+        <path d={`M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="14" strokeLinecap="round" />
         <path
           d={`M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`}
-          fill="none"
-          stroke="rgba(255,255,255,0.07)"
-          strokeWidth="14"
-          strokeLinecap="round"
+          fill="none" stroke={color} strokeWidth="14" strokeLinecap="round"
+          strokeDasharray={arcLength} strokeDashoffset={dashOffset}
+          style={{ transition: 'stroke-dashoffset 1.3s cubic-bezier(0.4,0,0.2,1), stroke 0.5s ease', filter: `drop-shadow(0 0 8px ${color}80)` }}
         />
-        {/* Score arc — sweep=1 (clockwise in SVG = upper arc left→right) */}
-        <path
-          d={`M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`}
-          fill="none"
-          stroke={color}
-          strokeWidth="14"
-          strokeLinecap="round"
-          strokeDasharray={arcLength}
-          strokeDashoffset={dashOffset}
-          style={{
-            transition: 'stroke-dashoffset 1.3s cubic-bezier(0.4,0,0.2,1), stroke 0.5s ease',
-            filter: `drop-shadow(0 0 8px ${color}80)`,
-          }}
-        />
-        {/* Score text */}
-        <text
-          x="110" y="97"
-          textAnchor="middle"
-          fontSize="27"
-          fontWeight="800"
-          fill="#f8fafc"
-          fontFamily="Inter, sans-serif"
-        >
-          {pct.toFixed(1)}%
-        </text>
-        <text
-          x="110" y="116"
-          textAnchor="middle"
-          fontSize="9"
-          fill="#475569"
-          fontFamily="Inter, sans-serif"
-          letterSpacing="0.14em"
-        >
-          AI PROBABILITY
-        </text>
-        {/* Scale labels */}
+        <text x="110" y="97" textAnchor="middle" fontSize="27" fontWeight="800" fill="#f8fafc" fontFamily="Inter, sans-serif">{pct.toFixed(1)}%</text>
+        <text x="110" y="116" textAnchor="middle" fontSize="9" fill="#475569" fontFamily="Inter, sans-serif" letterSpacing="0.14em">AI PROBABILITY</text>
         <text x="26" y={CY + 20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter, sans-serif">0%</text>
         <text x="194" y={CY + 20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter, sans-serif">100%</text>
       </svg>
@@ -84,16 +45,13 @@ function ConfidenceGauge({ score, confidenceBand }) {
 // ─── AudioPlayer ──────────────────────────────────────────────────────────────
 function AudioPlayer({ file }) {
   const [audioUrl, setAudioUrl] = useState(null)
-
   useEffect(() => {
     if (!file) return
     const url = URL.createObjectURL(file)
     setAudioUrl(url)
     return () => URL.revokeObjectURL(url)
   }, [file])
-
   if (!audioUrl) return null
-
   return (
     <div className="panel-block audio-player-wrap">
       <div className="panel-label">
@@ -101,12 +59,7 @@ function AudioPlayer({ file }) {
         <span>Audio Preview</span>
         <span className="panel-note">uploaded file</span>
       </div>
-      <audio
-        className="audio-player"
-        src={audioUrl}
-        controls
-        preload="metadata"
-      />
+      <audio className="audio-player" src={audioUrl} controls preload="metadata" />
     </div>
   )
 }
@@ -114,7 +67,6 @@ function AudioPlayer({ file }) {
 // ─── SpectrogramPanel ─────────────────────────────────────────────────────────
 function SpectrogramPanel({ spectrogramB64 }) {
   if (!spectrogramB64) return null
-
   return (
     <div className="panel-block spectrogram-panel">
       <div className="panel-label">
@@ -123,63 +75,406 @@ function SpectrogramPanel({ spectrogramB64 }) {
         <span className="panel-note">full audio · capped at 120 s</span>
       </div>
       <div className="spectrogram-img-wrap">
-        <img
-          src={`data:image/png;base64,${spectrogramB64}`}
-          alt="Mel spectrogram of the analysed audio"
-          className="spectrogram-img"
-        />
+        <img src={`data:image/png;base64,${spectrogramB64}`} alt="Mel spectrogram" className="spectrogram-img" />
+      </div>
+    </div>
+  )
+}
+
+// ─── DurationWarning ─────────────────────────────────────────────────────────
+function DurationWarning({ message }) {
+  if (!message) return null
+  return (
+    <div className="duration-warning" role="alert">
+      <span className="duration-warning-icon" aria-hidden="true">⏱</span>
+      <div className="duration-warning-body">
+        <strong>Short Audio Warning</strong>
+        <p>{message}</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── FrequencyHeatmap ─────────────────────────────────────────────────────────
+const MAGMA_STOPS = [
+  [0, 0, 4], [28, 16, 68], [79, 18, 123], [129, 37, 129],
+  [181, 54, 122], [229, 80, 100], [251, 136, 97], [252, 253, 191],
+]
+function magmaColor(t) {
+  const clamped = Math.max(0, Math.min(1, t))
+  const idx = clamped * (MAGMA_STOPS.length - 1)
+  const lo = Math.floor(idx), hi = Math.min(lo + 1, MAGMA_STOPS.length - 1)
+  const f = idx - lo
+  return `rgb(${Math.round(MAGMA_STOPS[lo][0] + f * (MAGMA_STOPS[hi][0] - MAGMA_STOPS[lo][0]))},${Math.round(MAGMA_STOPS[lo][1] + f * (MAGMA_STOPS[hi][1] - MAGMA_STOPS[lo][1]))},${Math.round(MAGMA_STOPS[lo][2] + f * (MAGMA_STOPS[hi][2] - MAGMA_STOPS[lo][2]))})`
+}
+
+const BAND_LABELS_TOP_TO_BOTTOM = ['Air', 'Brilliance', 'Presence', 'Upper-mid', 'Mid', 'Low-mid', 'Bass', 'Sub-bass']
+const BAND_LABELS_LOOKUP = ['Sub-bass', 'Bass', 'Low-mid', 'Mid', 'Upper-mid', 'Presence', 'Brilliance', 'Air']
+
+function FrequencyHeatmap({ profiles, chunkTimeline, selectedChunkIdx, onChunkClick }) {
+  const canvasRef = useRef(null)
+  const [tooltip, setTooltip] = useState(null)
+  const N_BUCKETS = 16
+
+  const drawCanvas = useCallback(() => {
+    if (!profiles?.length || !canvasRef.current) return
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    const N = profiles.length
+    const W = canvas.width, H = canvas.height
+    const cw = W / N, ch = H / N_BUCKETS
+    ctx.clearRect(0, 0, W, H)
+    for (let c = 0; c < N; c++) {
+      for (let b = 0; b < N_BUCKETS; b++) {
+        const val = profiles[c][N_BUCKETS - 1 - b]
+        ctx.fillStyle = magmaColor(val)
+        ctx.fillRect(c * cw, b * ch, Math.max(1, cw - 0.5), Math.max(1, ch - 0.5))
+        const aiScore = (chunkTimeline?.[c]?.score ?? 0) / 100
+        if (aiScore > 0.3) {
+          ctx.fillStyle = `rgba(244,63,94,${Math.min(0.42, (aiScore - 0.3) * 0.6)})`
+          ctx.fillRect(c * cw, b * ch, Math.max(1, cw - 0.5), Math.max(1, ch - 0.5))
+        }
+      }
+      if (selectedChunkIdx === c) {
+        ctx.strokeStyle = 'rgba(167,139,250,0.95)'
+        ctx.lineWidth = 2.5
+        ctx.strokeRect(c * cw + 1, 1, cw - 2, H - 2)
+      }
+    }
+  }, [profiles, chunkTimeline, selectedChunkIdx, N_BUCKETS])
+
+  useEffect(() => { drawCanvas() }, [drawCanvas])
+
+  const handleMouseMove = useCallback((e) => {
+    if (!profiles?.length || !canvasRef.current) return
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const scaleX = canvas.width / rect.width
+    const scaleY = canvas.height / rect.height
+    const cx = (e.clientX - rect.left) * scaleX
+    const cy = (e.clientY - rect.top) * scaleY
+    const chunkIdx = Math.min(Math.floor(cx / (canvas.width / profiles.length)), profiles.length - 1)
+    const bandFlipped = Math.floor(cy / (canvas.height / N_BUCKETS))
+    const bandIdx = Math.max(0, Math.min(N_BUCKETS - 1, N_BUCKETS - 1 - bandFlipped))
+    const chunk = chunkTimeline?.[chunkIdx]
+    setTooltip({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      displayWidth: rect.width,
+      chunkIdx,
+      bandLabel: BAND_LABELS_LOOKUP[Math.floor(bandIdx / 2)] ?? '—',
+      energy: profiles[chunkIdx]?.[bandIdx] ?? 0,
+      score: chunk?.score ?? null,
+      startSec: chunk?.start_sec ?? 0,
+      endSec: chunk?.end_sec ?? 0,
+    })
+  }, [profiles, chunkTimeline, N_BUCKETS])
+
+  const handleClick = useCallback(() => {
+    if (!tooltip) return
+    const chunk = chunkTimeline?.[tooltip.chunkIdx]
+    if (chunk) onChunkClick?.(chunk, tooltip.chunkIdx)
+  }, [tooltip, chunkTimeline, onChunkClick])
+
+  if (!profiles?.length) return null
+
+  return (
+    <div className="panel-block heatmap-panel">
+      <div className="panel-label">
+        <span className="panel-icon">🌡️</span>
+        <span>Frequency Band Heatmap</span>
+        <span className="panel-note">spectral energy per chunk · red overlay = elevated AI score · click to play</span>
+      </div>
+      <div className="heatmap-layout">
+        <div className="heatmap-y-axis">
+          {BAND_LABELS_TOP_TO_BOTTOM.map(l => <span key={l}>{l}</span>)}
+        </div>
+        <div className="heatmap-canvas-wrap" onMouseLeave={() => setTooltip(null)}>
+          <canvas
+            ref={canvasRef}
+            width={900} height={144}
+            className="heatmap-canvas"
+            onMouseMove={handleMouseMove}
+            onClick={handleClick}
+          />
+          {tooltip && (() => {
+            const TOOLTIP_W = 170
+            const flipLeft = tooltip.displayWidth && tooltip.x > tooltip.displayWidth / 2
+            return (
+              <div className="heatmap-tooltip" style={{
+                left: flipLeft ? tooltip.x - TOOLTIP_W - 8 : tooltip.x + 14,
+                top: Math.max(4, tooltip.y - 82),
+              }}>
+                <span className="ht-time">{tooltip.startSec.toFixed(1)}s – {tooltip.endSec.toFixed(1)}s</span>
+                <span className="ht-band">{tooltip.bandLabel}</span>
+                <span className="ht-energy">Energy: {(tooltip.energy * 100).toFixed(1)}%</span>
+                {tooltip.score != null && (
+                  <span className="ht-score" style={{ color: tooltip.score >= 90 ? '#fb7185' : tooltip.score >= 30 ? '#fbbf24' : '#34d399' }}>
+                    AI Score: {tooltip.score.toFixed(1)}%
+                  </span>
+                )}
+                <span className="ht-hint">Click to play segment</span>
+              </div>
+            )
+          })()}
+        </div>
+      </div>
+      <div className="heatmap-legend">
+        <span className="hl-item">Low</span>
+        <div className="heatmap-colorbar" />
+        <span className="hl-item">High energy</span>
+        <span className="hl-sep">·</span>
+        <span className="hl-item hl-item--ai">🔴 Red overlay = high AI score</span>
+      </div>
+    </div>
+  )
+}
+
+// ─── ConfidenceWaterfall ──────────────────────────────────────────────────────
+function ConfidenceWaterfall({ chunkTimeline, selectedChunkIdx, onChunkClick }) {
+  const [hovered, setHovered] = useState(null)
+  if (!chunkTimeline?.length) return null
+
+  const SVG_W = 900, SVG_H = 200
+  const PAD = { top: 20, right: 52, bottom: 40, left: 48 }
+  const chartW = SVG_W - PAD.left - PAD.right
+  const chartH = SVG_H - PAD.top - PAD.bottom
+  const N = chunkTimeline.length
+  const spacing = chartW / N
+  const barW = Math.max(2, spacing * 0.72)
+
+  const yScale = (pct) => PAD.top + chartH * (1 - pct / 100)
+  const barColor = (s) => s < 30 ? '#10b981' : s < 90 ? '#f59e0b' : '#f43f5e'
+  const glowColor = (s) => s < 30 ? 'rgba(16,185,129,0.45)' : s < 90 ? 'rgba(245,158,11,0.45)' : 'rgba(244,63,94,0.55)'
+
+  const tickIndices = N <= 6
+    ? chunkTimeline.map((_, i) => i)
+    : [0, Math.floor(N * 0.25), Math.floor(N * 0.5), Math.floor(N * 0.75), N - 1]
+
+  return (
+    <div className="panel-block waterfall-panel">
+      <div className="panel-label">
+        <span className="panel-icon">📈</span>
+        <span>Confidence Waterfall</span>
+        <span className="panel-note">AI probability per segment · {N} chunks · click to play</span>
+      </div>
+      <div className="waterfall-svg-wrap">
+        <svg viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="waterfall-svg" onMouseLeave={() => setHovered(null)}>
+          {/* Grid lines */}
+          {[0, 30, 60, 90, 100].map(pct => {
+            const y = yScale(pct)
+            const isThresh = pct === 30 || pct === 90
+            return (
+              <g key={pct}>
+                <line x1={PAD.left} x2={SVG_W - PAD.right} y1={y} y2={y}
+                  stroke={isThresh ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)'}
+                  strokeDasharray={isThresh ? '5 5' : undefined}
+                  strokeWidth={isThresh ? 1.5 : 1} />
+                <text x={PAD.left - 8} y={y + 4} textAnchor="end" fontSize="10"
+                  fontFamily="Inter, sans-serif"
+                  fill={pct === 30 ? '#34d399' : pct === 90 ? '#fb7185' : '#334155'}>
+                  {pct}%
+                </text>
+              </g>
+            )
+          })}
+          {/* Right-side labels */}
+          <text x={SVG_W - PAD.right + 6} y={yScale(15) + 4} fontSize="9" fontFamily="Inter, sans-serif" fill="#34d39988">Human</text>
+          <text x={SVG_W - PAD.right + 6} y={yScale(95) + 4} fontSize="9" fontFamily="Inter, sans-serif" fill="#fb718588">AI</text>
+          {/* Y label */}
+          <text x={14} y={PAD.top + chartH / 2} textAnchor="middle" fontSize="9"
+            fontFamily="Inter, sans-serif" fill="#475569"
+            transform={`rotate(-90, 14, ${PAD.top + chartH / 2})`}>AI PROB %</text>
+
+          {/* Bars */}
+          {chunkTimeline.map((chunk, i) => {
+            const x = PAD.left + i * spacing + (spacing - barW) / 2
+            const barH = Math.max(2, chartH * (chunk.score / 100))
+            const y = PAD.top + chartH - barH
+            const isHov = hovered === i, isSel = selectedChunkIdx === i
+            const color = barColor(chunk.score)
+            return (
+              <g key={i} style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHovered(i)}
+                onMouseLeave={() => setHovered(null)}
+                onClick={() => onChunkClick?.(chunk, i)}>
+                {/* Invisible full-height hit area — makes empty space above short bars hoverable */}
+                <rect
+                  x={PAD.left + i * spacing} y={PAD.top}
+                  width={spacing} height={chartH}
+                  fill="transparent"
+                />
+                {(isHov || isSel) && (
+                  <rect x={x - 2} y={PAD.top} width={barW + 4} height={chartH}
+                    fill="rgba(255,255,255,0.04)" rx="3" />
+                )}
+                <rect x={x} y={y} width={barW} height={barH} fill={color} rx="2"
+                  className="waterfall-bar"
+                  style={{
+                    animationDelay: `${i * 0.015}s`,
+                    filter: (isHov || isSel) ? `drop-shadow(0 0 6px ${glowColor(chunk.score)})` : undefined,
+                  }} />
+                {isSel && (
+                  <rect x={x - 1} y={PAD.top} width={barW + 2} height={chartH}
+                    fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.5" rx="3" />
+                )}
+                {isHov && (() => {
+                  const ttX = Math.min(x - 20, SVG_W - PAD.right - 78)
+                  // Clamp tooltip so it never overflows the top of the SVG viewport
+                  const TT_H = 44
+                  const rawTtY = y - 52
+                  const ttY = rawTtY < PAD.top + 2 ? PAD.top + 2 : rawTtY
+                  return (
+                    <g>
+                      <rect x={ttX} y={ttY} width={76} height={TT_H} rx="8"
+                        fill="rgba(10,13,22,0.96)" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                      <text x={ttX + 38} y={ttY + 19} textAnchor="middle" fontSize="12"
+                        fontWeight="700" fontFamily="Inter, sans-serif" fill={color}>
+                        {chunk.score.toFixed(1)}%
+                      </text>
+                      <text x={ttX + 38} y={ttY + 36} textAnchor="middle" fontSize="9"
+                        fontFamily="Inter, sans-serif" fill="#64748b">
+                        {chunk.start_sec.toFixed(1)}–{chunk.end_sec.toFixed(1)}s
+                      </text>
+                    </g>
+                  )
+                })()}
+              </g>
+            )
+          })}
+
+          {/* X-axis time labels */}
+          {tickIndices.map(i => {
+            const chunk = chunkTimeline[i]
+            if (!chunk) return null
+            return (
+              <text key={i} x={PAD.left + i * spacing + spacing / 2} y={SVG_H - 8}
+                textAnchor="middle" fontSize="10" fontFamily="Inter, sans-serif" fill="#475569">
+                {chunk.start_sec.toFixed(0)}s
+              </text>
+            )
+          })}
+        </svg>
+      </div>
+    </div>
+  )
+}
+
+// ─── ChunkPlayer ──────────────────────────────────────────────────────────────
+function ChunkPlayer({ chunk, audioFile, apiBaseUrl, mode, onClose }) {
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [error, setError] = useState('')
+  const audioCtxRef = useRef(null)
+  const sourceRef = useRef(null)
+  const audioElRef = useRef(null)
+
+  const stop = useCallback(() => {
+    try { sourceRef.current?.stop() } catch { }
+    sourceRef.current = null
+    if (audioElRef.current) { audioElRef.current.pause(); audioElRef.current.src = ''; audioElRef.current = null }
+    setIsPlaying(false)
+  }, [])
+
+  useEffect(() => () => stop(), [stop])
+  useEffect(() => { stop(); setError('') }, [chunk?.start_sec, chunk?.end_sec, stop])
+
+  const play = useCallback(async () => {
+    stop(); setError(''); setIsPlaying(true)
+    try {
+      if (mode === 'upload' && audioFile) {
+        const ctx = audioCtxRef.current || new AudioContext()
+        if (ctx.state === 'suspended') await ctx.resume()
+        audioCtxRef.current = ctx
+        const audioBuf = await ctx.decodeAudioData(await audioFile.arrayBuffer())
+        const src = ctx.createBufferSource()
+        src.buffer = audioBuf
+        src.connect(ctx.destination)
+        sourceRef.current = src
+        src.onended = () => setIsPlaying(false)
+        src.start(0, chunk.start_sec, chunk.end_sec - chunk.start_sec)
+      } else {
+        const resp = await fetch(`${apiBaseUrl}/audio/segment/?start=${chunk.start_sec}&end=${chunk.end_sec}`)
+        if (!resp.ok) throw new Error('Failed to fetch segment from server.')
+        const objUrl = URL.createObjectURL(await resp.blob())
+        const audio = new Audio(objUrl)
+        audioElRef.current = audio
+        audio.onended = () => { setIsPlaying(false); URL.revokeObjectURL(objUrl) }
+        audio.onerror = () => { setIsPlaying(false); setError('Playback failed.') }
+        audio.play()
+      }
+    } catch (err) { setError(err.message || 'Playback failed.'); setIsPlaying(false) }
+  }, [chunk, audioFile, apiBaseUrl, mode, stop])
+
+  const scoreColor = chunk.score >= 90 ? '#fb7185' : chunk.score >= 30 ? '#fbbf24' : '#34d399'
+
+  return (
+    <div className="chunk-player">
+      <div className="cp-header">
+        <span className="cp-icon">🎵</span>
+        <span className="cp-title">Segment Player</span>
+        <div className="cp-badges">
+          <span className="cp-badge cp-badge--time">{chunk.start_sec.toFixed(2)}s – {chunk.end_sec.toFixed(2)}s</span>
+          <span className="cp-badge" style={{ color: scoreColor, borderColor: `${scoreColor}50`, background: `${scoreColor}15` }}>
+            {chunk.score.toFixed(1)}% AI
+          </span>
+        </div>
+        <button className="cp-close" onClick={onClose} aria-label="Close player">✕</button>
+      </div>
+      <div className="cp-controls">
+        <button className={`cp-play-btn${isPlaying ? ' cp-play-btn--stop' : ''}`} onClick={isPlaying ? stop : play}>
+          {isPlaying ? '⏹ Stop' : '▶ Play Segment'}
+        </button>
+        {isPlaying && (
+          <span className="cp-playing-indicator" aria-label="Playing">
+            <span className="cp-wave" /><span className="cp-wave" /><span className="cp-wave" /><span className="cp-wave" />
+          </span>
+        )}
+        {error && <span className="cp-error">{error}</span>}
       </div>
     </div>
   )
 }
 
 // ─── SegmentTimeline ──────────────────────────────────────────────────────────
-function SegmentTimeline({ timeline }) {
+function SegmentTimeline({ timeline, onChunkClick, selectedChunkIdx }) {
   const [hovered, setHovered] = useState(null)
-
   if (!timeline || timeline.length === 0) return null
 
-  const aiCount    = timeline.filter(c => c.score >= 90).length
+  const aiCount = timeline.filter(c => c.score >= 90).length
   const humanCount = timeline.filter(c => c.score < 30).length
-  const uncCount   = timeline.length - aiCount - humanCount
-
-  const segColor = (score) =>
-    score < 30 ? 'human' : score < 90 ? 'uncertain' : 'ai'
+  const uncCount = timeline.length - aiCount - humanCount
+  const segColor = (score) => score < 30 ? 'human' : score < 90 ? 'uncertain' : 'ai'
 
   return (
     <div className="panel-block segment-timeline">
       <div className="panel-label">
         <span className="panel-icon">⏱</span>
-        <span>Segment Analysis</span>
-        <span className="panel-note">VAD-stripped speech audio · {timeline.length} chunks · chunks may overlap</span>
+        <span>Segment Strip</span>
+        <span className="panel-note">VAD-stripped speech · {timeline.length} chunks · click any segment to play</span>
       </div>
-
       <div className="timeline-track-wrap">
         <div className="timeline-track">
           {timeline.map((chunk, i) => (
             <div
               key={i}
-              className={`timeline-seg timeline-seg--${segColor(chunk.score)}`}
+              className={`timeline-seg timeline-seg--${segColor(chunk.score)}${selectedChunkIdx === i ? ' timeline-seg--selected' : ''}`}
               style={{ flex: 1 }}
               onMouseEnter={() => setHovered(i)}
               onMouseLeave={() => setHovered(null)}
+              onClick={() => onChunkClick?.(chunk, i)}
             >
               {hovered === i && (
                 <div className="seg-tooltip">
-                  <span className="seg-tt-time">
-                    {chunk.start_sec.toFixed(1)}s – {chunk.end_sec.toFixed(1)}s
-                  </span>
-                  <span className="seg-tt-score"
-                    style={{ color: chunk.score >= 90 ? '#fb7185' : chunk.score >= 30 ? '#fbbf24' : '#34d399' }}
-                  >
+                  <span className="seg-tt-time">{chunk.start_sec.toFixed(1)}s – {chunk.end_sec.toFixed(1)}s</span>
+                  <span className="seg-tt-score" style={{ color: chunk.score >= 90 ? '#fb7185' : chunk.score >= 30 ? '#fbbf24' : '#34d399' }}>
                     {chunk.score.toFixed(1)}% AI
                   </span>
+                  <span className="seg-tt-hint">Click to play</span>
                 </div>
               )}
             </div>
           ))}
         </div>
-        {/* Time scale */}
         <div className="timeline-scale">
           <span>0 s</span>
           {timeline[Math.floor(timeline.length / 2)] && (
@@ -188,14 +483,11 @@ function SegmentTimeline({ timeline }) {
           <span>{timeline[timeline.length - 1]?.end_sec.toFixed(1)} s</span>
         </div>
       </div>
-
       <div className="timeline-legend">
         <span className="leg leg--human">● Human <em>({humanCount})</em></span>
         <span className="leg leg--uncertain">● Uncertain <em>({uncCount})</em></span>
         <span className="leg leg--ai">● AI-Generated <em>({aiCount})</em></span>
-        <span className="leg leg--ratio">
-          {aiCount}/{timeline.length} chunks high-confidence AI ({Math.round((aiCount / timeline.length) * 100)}%)
-        </span>
+        <span className="leg leg--ratio">{aiCount}/{timeline.length} chunks high-confidence AI ({Math.round((aiCount / timeline.length) * 100)}%)</span>
       </div>
     </div>
   )
@@ -221,18 +513,17 @@ function DisclaimerCallout() {
 
 // ─── ProgressStepper ─────────────────────────────────────────────────────────
 const PIPELINE_STAGES = [
-  { key: 'downloading', icon: '⬇️',  label: 'Download'    },
-  { key: 'loading',     icon: '🔊',  label: 'Load Audio'  },
-  { key: 'vad',         icon: '🎙️',  label: 'VAD'         },
-  { key: 'inference',   icon: '🧠',  label: 'AI Analysis' },
-  { key: 'spectrogram', icon: '📊',  label: 'Spectrogram' },
-  { key: 'done',        icon: '✅',  label: 'Done'        },
+  { key: 'downloading', icon: '⬇️', label: 'Download' },
+  { key: 'loading', icon: '🔊', label: 'Load Audio' },
+  { key: 'vad', icon: '🎙️', label: 'VAD' },
+  { key: 'inference', icon: '🧠', label: 'AI Analysis' },
+  { key: 'spectrogram', icon: '📊', label: 'Spectrogram' },
+  { key: 'done', icon: '✅', label: 'Done' },
 ]
 
 function ProgressStepper({ progress }) {
   if (!progress) return null
   const currentIdx = PIPELINE_STAGES.findIndex(s => s.key === progress.stage)
-
   return (
     <div className="pipeline-progress">
       <div className="pipeline-steps">
@@ -241,10 +532,7 @@ function ProgressStepper({ progress }) {
           return (
             <div key={stage.key} className={`pipeline-step pipeline-step--${status}`}>
               <div className="pipeline-step-dot">
-                {status === 'done'
-                  ? <span className="pipeline-step-check">✓</span>
-                  : <span className="pipeline-step-icon">{stage.icon}</span>
-                }
+                {status === 'done' ? <span className="pipeline-step-check">✓</span> : <span className="pipeline-step-icon">{stage.icon}</span>}
                 {status === 'active' && <span className="pipeline-step-pulse" />}
               </div>
               <span className="pipeline-step-label">{stage.label}</span>
@@ -255,14 +543,9 @@ function ProgressStepper({ progress }) {
           )
         })}
       </div>
-
       <div className="pipeline-bar-wrap">
-        <div
-          className="pipeline-bar-fill"
-          style={{ width: `${progress.pct ?? 0}%` }}
-        />
+        <div className="pipeline-bar-fill" style={{ width: `${progress.pct ?? 0}%` }} />
       </div>
-
       <p className="pipeline-label">
         <span className="pipeline-spinner" aria-hidden="true" />
         {progress.label}
@@ -279,10 +562,8 @@ function SkeletonLoader() {
       <div className="skel-gauge-row">
         <div className="skel skel--gauge" />
         <div className="skel-stats">
-          <div className="skel skel--stat" />
-          <div className="skel skel--stat" />
-          <div className="skel skel--stat" />
-          <div className="skel skel--stat" />
+          <div className="skel skel--stat" /><div className="skel skel--stat" />
+          <div className="skel skel--stat" /><div className="skel skel--stat" />
         </div>
       </div>
       <div className="skel skel--spec" />
@@ -293,99 +574,77 @@ function SkeletonLoader() {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 function App() {
-  const [mode, setMode]             = useState('youtube')
-  const [youtubeUrl, setYoutubeUrl]  = useState('')
-  const [audioFile, setAudioFile]    = useState(null)
+  const [mode, setMode] = useState('youtube')
+  const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [audioFile, setAudioFile] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [result, setResult]          = useState(null)
-  const [error, setError]            = useState('')
-  const [progress, setProgress]      = useState(null)   // { stage, label, pct }
-  const audioFileRef                 = useRef(null)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+  const [progress, setProgress] = useState(null)
+  const [selectedChunk, setSelectedChunk] = useState(null)
+  const [selectedChunkIdx, setSelectedChunkIdx] = useState(null)
+  const audioFileRef = useRef(null)
 
-  const apiBaseUrl = useMemo(
-    () => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
-    []
-  )
+  const apiBaseUrl = useMemo(() => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000', [])
 
   const predictionLabel = result?.prediction || result?.binary_prediction
-  const isAi            = predictionLabel === 'AI-Generated'
-  const isHuman         = predictionLabel === 'Human Voice'
-  const bannerVariant   = isAi ? 'ai' : isHuman ? 'human' : 'uncertain'
+  const isAi = predictionLabel === 'AI-Generated'
+  const isHuman = predictionLabel === 'Human Voice'
+  const bannerVariant = isAi ? 'ai' : isHuman ? 'human' : 'uncertain'
 
   const handleModeChange = (next) => {
-    setMode(next)
-    setResult(null)
-    setError('')
-    setProgress(null)
+    setMode(next); setResult(null); setError(''); setProgress(null)
+    setSelectedChunk(null); setSelectedChunkIdx(null)
   }
 
   const handleFileChange = (e) => {
     const f = e.target.files?.[0] || null
-    setAudioFile(f)
-    audioFileRef.current = f
+    setAudioFile(f); audioFileRef.current = f
   }
+
+  const handleChunkClick = useCallback((chunk, idx) => {
+    if (selectedChunkIdx === idx) { setSelectedChunk(null); setSelectedChunkIdx(null) }
+    else { setSelectedChunk(chunk); setSelectedChunkIdx(idx) }
+  }, [selectedChunkIdx])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    setError('')
-    setResult(null)
-    setProgress(null)
+    setError(''); setResult(null); setProgress(null)
+    setSelectedChunk(null); setSelectedChunkIdx(null)
 
     try {
       setIsSubmitting(true)
-
       if (mode === 'youtube') {
         if (!youtubeUrl.trim()) throw new Error('Please paste a YouTube link first.')
-
         const response = await fetch(`${apiBaseUrl}/predict/youtube/stream/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: youtubeUrl.trim() }),
         })
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}))
-          throw new Error(data?.detail || 'Request failed.')
-        }
+        if (!response.ok) { const d = await response.json().catch(() => ({})); throw new Error(d?.detail || 'Request failed.') }
 
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
-        let buffer = ''
-        let processingError = null
+        let buffer = '', processingError = null
 
         outer: while (true) {
           const { done, value } = await reader.read()
           if (done) break
           buffer += decoder.decode(value, { stream: true })
-
-          const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
-
+          const lines = buffer.split('\n'); buffer = lines.pop() ?? ''
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue
-            let evt
-            try { evt = JSON.parse(line.slice(6)) } catch { continue }
-
-            if (evt.stage === 'error') {
-              processingError = evt.message || 'Processing failed.'
-              reader.cancel()
-              break outer
-            } else if (evt.stage === 'done') {
-              setResult(evt.result)
-              setProgress(null)
-              break outer
-            } else {
-              setProgress(evt)
-            }
+            let evt; try { evt = JSON.parse(line.slice(6)) } catch { continue }
+            if (evt.stage === 'error') { processingError = evt.message || 'Processing failed.'; reader.cancel(); break outer }
+            else if (evt.stage === 'done') { setResult(evt.result); setProgress(null); break outer }
+            else { setProgress(evt) }
           }
         }
-
         if (processingError) throw new Error(processingError)
 
       } else {
         if (!audioFile) throw new Error('Please choose an audio file first.')
-        const fd = new FormData()
-        fd.append('file', audioFile)
+        const fd = new FormData(); fd.append('file', audioFile)
         const response = await fetch(`${apiBaseUrl}/predict/`, { method: 'POST', body: fd })
         const data = await response.json()
         if (!response.ok) throw new Error(data?.detail || 'Prediction failed.')
@@ -394,12 +653,11 @@ function App() {
     } catch (err) {
       setError(err.message || 'Something went wrong.')
     } finally {
-      setIsSubmitting(false)
-      setProgress(null)
+      setIsSubmitting(false); setProgress(null)
     }
   }
 
-  const avgScore      = result?.average_ai_probability_score ?? 0
+  const avgScore = result?.average_ai_probability_score ?? 0
   const confidenceBand = result?.confidence_band ?? ''
 
   return (
@@ -412,75 +670,44 @@ function App() {
           <h1>Audio Deepfake Detection</h1>
           <p>
             Analyse a YouTube link or upload a file to detect AI-generated speech.
-            Results include a confidence score, mel spectrogram, and per-segment timeline.
+            Results include a confidence score, frequency heatmap, waterfall chart, and per-segment playback.
           </p>
         </div>
 
         {/* ── Input form ── */}
         <form className="predict-form" onSubmit={handleSubmit}>
           <div className="mode-switch" role="tablist" aria-label="Input source">
-            <button
-              id="tab-youtube"
-              type="button"
-              role="tab"
-              aria-selected={mode === 'youtube'}
+            <button id="tab-youtube" type="button" role="tab" aria-selected={mode === 'youtube'}
               className={mode === 'youtube' ? 'mode-button active' : 'mode-button'}
-              onClick={() => handleModeChange('youtube')}
-            >
-              YouTube Link
-            </button>
-            <button
-              id="tab-upload"
-              type="button"
-              role="tab"
-              aria-selected={mode === 'upload'}
+              onClick={() => handleModeChange('youtube')}>YouTube Link</button>
+            <button id="tab-upload" type="button" role="tab" aria-selected={mode === 'upload'}
               className={mode === 'upload' ? 'mode-button active' : 'mode-button'}
-              onClick={() => handleModeChange('upload')}
-            >
-              Audio File Upload
-            </button>
+              onClick={() => handleModeChange('upload')}>Audio File Upload</button>
           </div>
 
           {mode === 'youtube' ? (
             <label className="field" htmlFor="youtube-url">
               <span>YouTube URL</span>
-              <input
-                id="youtube-url"
-                type="url"
-                placeholder="https://www.youtube.com/watch?v=..."
-                value={youtubeUrl}
-                onChange={(e) => setYoutubeUrl(e.target.value)}
-              />
+              <input id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..."
+                value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} />
             </label>
           ) : (
             <label className="field" htmlFor="audio-file">
-              <span>
-                Audio File
-                <small className="format-hint">.wav · .mp3 · .flac</small>
-              </span>
-              <input
-                id="audio-file"
-                type="file"
-                accept=".wav,.mp3,.flac,audio/*"
-                onChange={handleFileChange}
-              />
-              <small className="file-name">
-                {audioFile ? `Selected: ${audioFile.name}` : 'No file selected.'}
-              </small>
+              <span>Audio File <small className="format-hint">.wav · .mp3 · .flac</small></span>
+              <input id="audio-file" type="file" accept=".wav,.mp3,.flac,audio/*" onChange={handleFileChange} />
+              <small className="file-name">{audioFile ? `Selected: ${audioFile.name}` : 'No file selected.'}</small>
             </label>
           )}
 
           <button id="predict-btn" type="submit" className="predict-button" disabled={isSubmitting}>
-            {isSubmitting
-              ? <span className="btn-inner"><span className="spinner" aria-hidden="true" />Analysing…</span>
-              : 'Run Detection'}
+            {isSubmitting ? <span className="btn-inner"><span className="spinner" aria-hidden="true" />Analysing…</span> : 'Run Detection'}
           </button>
         </form>
 
         {/* ── Error ── */}
         {error && <p className="error-box" role="alert">{error}</p>}
 
-        {/* ── Skeleton while loading (upload mode) / Progress stepper (YouTube) ── */}
+        {/* ── Loading states ── */}
         {isSubmitting && mode === 'youtube' && <ProgressStepper progress={progress} />}
         {isSubmitting && mode !== 'youtube' && <SkeletonLoader />}
 
@@ -490,9 +717,7 @@ function App() {
 
             {/* Prediction banner */}
             <div className={`prediction-banner prediction-banner--${bannerVariant}`}>
-              <span className="pred-icon" aria-hidden="true">
-                {isAi ? '🤖' : isHuman ? '✅' : '❓'}
-              </span>
+              <span className="pred-icon" aria-hidden="true">{isAi ? '🤖' : isHuman ? '✅' : '❓'}</span>
               <div className="pred-text">
                 <div className="pred-label">Prediction</div>
                 <div className="pred-value">{predictionLabel}</div>
@@ -505,29 +730,23 @@ function App() {
               </div>
             </div>
 
+            {/* Duration warning (soft alert for very short audio) */}
+            <DurationWarning message={result.duration_warning} />
+
             {/* Gauge + stats */}
             <div className="gauge-stats-row">
               <ConfidenceGauge score={avgScore} confidenceBand={confidenceBand} />
-
               <div className="stats-grid">
                 <div className="stat-card">
                   <span>AI Probability Score</span>
-                  <strong style={{
-                    color: avgScore < 30 ? '#34d399' : avgScore < 90 ? '#fbbf24' : '#fb7185',
-                  }}>
+                  <strong style={{ color: avgScore < 30 ? '#34d399' : avgScore < 90 ? '#fbbf24' : '#fb7185' }}>
                     {avgScore.toFixed(2)}%
                   </strong>
                 </div>
                 <div className="stat-card">
                   <span>AI Chunk Ratio</span>
-                  <strong style={{
-                    color: (result.chunk_high_score_ratio ?? 0) < 0.3 ? '#34d399'
-                         : (result.chunk_high_score_ratio ?? 0) < 0.66 ? '#fbbf24'
-                         : '#fb7185',
-                  }}>
-                    {result.chunk_high_score_ratio != null
-                      ? `${Math.round(result.chunk_high_score_ratio * 100)}%`
-                      : '—'}
+                  <strong style={{ color: (result.chunk_high_score_ratio ?? 0) < 0.3 ? '#34d399' : (result.chunk_high_score_ratio ?? 0) < 0.66 ? '#fbbf24' : '#fb7185' }}>
+                    {result.chunk_high_score_ratio != null ? `${Math.round(result.chunk_high_score_ratio * 100)}%` : '—'}
                   </strong>
                 </div>
                 <div className="stat-card">
@@ -537,9 +756,7 @@ function App() {
                 <div className="stat-card">
                   <span>High-Conf AI Chunks</span>
                   <strong>
-                    {result.chunk_timeline
-                      ? `${result.chunk_timeline.filter(c => c.score >= 90).length} / ${result.chunk_count}`
-                      : '—'}
+                    {result.chunk_timeline ? `${result.chunk_timeline.filter(c => c.score >= 90).length} / ${result.chunk_count}` : '—'}
                   </strong>
                 </div>
                 {result.vad_summary?.vad_note && (
@@ -551,14 +768,42 @@ function App() {
               </div>
             </div>
 
+            {/* ── Explainability ── */}
+            <ConfidenceWaterfall
+              chunkTimeline={result.chunk_timeline}
+              selectedChunkIdx={selectedChunkIdx}
+              onChunkClick={handleChunkClick}
+            />
+
+            <FrequencyHeatmap
+              profiles={result.chunk_mel_profiles}
+              chunkTimeline={result.chunk_timeline}
+              selectedChunkIdx={selectedChunkIdx}
+              onChunkClick={handleChunkClick}
+            />
+
+            <SegmentTimeline
+              timeline={result.chunk_timeline}
+              onChunkClick={handleChunkClick}
+              selectedChunkIdx={selectedChunkIdx}
+            />
+
+            {/* Chunk player — appears when a segment is clicked */}
+            {selectedChunk && (
+              <ChunkPlayer
+                chunk={selectedChunk}
+                audioFile={audioFileRef.current}
+                apiBaseUrl={apiBaseUrl}
+                mode={mode}
+                onClose={() => { setSelectedChunk(null); setSelectedChunkIdx(null) }}
+              />
+            )}
+
             {/* Audio player (upload mode only) */}
             {mode === 'upload' && <AudioPlayer file={audioFileRef.current} />}
 
             {/* Mel spectrogram */}
             <SpectrogramPanel spectrogramB64={result.spectrogram_b64} />
-
-            {/* Segment timeline */}
-            <SegmentTimeline timeline={result.chunk_timeline} />
 
             {/* Disclaimer */}
             <DisclaimerCallout />

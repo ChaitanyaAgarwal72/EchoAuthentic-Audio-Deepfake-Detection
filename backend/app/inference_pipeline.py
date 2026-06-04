@@ -6,7 +6,7 @@ import importlib
 from fastapi import HTTPException
 import numpy as np
 
-from app.audio_utils import load_waveform, waveform_to_model_input, waveform_to_model_input_batch
+from app.audio_utils import load_waveform, waveform_to_model_input, waveform_to_model_input_batch, waveform_to_mel_profile_batch
 
 DEFAULT_INFERENCE_THRESHOLD = 0.98549
 DEFAULT_CONFIDENCE_HUMAN_MAX = 0.30
@@ -215,6 +215,7 @@ def analyze_waveform_pipeline(
         chunk_overlap_seconds=chunk_overlap_seconds,
     )
     chunk_scores = score_waveforms(ort_session, chunks)
+    chunk_mel_profiles = waveform_to_mel_profile_batch(chunks)
     summary = summarize_scores(
         chunk_scores,
         human_max=human_max,
@@ -244,6 +245,7 @@ def analyze_waveform_pipeline(
         "chunk_count": len(chunk_scores),
         "chunk_scores": [round(score, 6) for score in chunk_scores],
         "chunk_timeline": chunk_timeline,
+        "chunk_mel_profiles": chunk_mel_profiles,
         "vad_summary": vad_summary,
         **summary,
     }

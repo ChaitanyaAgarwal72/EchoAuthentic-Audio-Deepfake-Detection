@@ -15,6 +15,27 @@ ALLOWED_YOUTUBE_HOSTNAMES = {
     "youtu.be",
 }
 
+# Hard cap: refuse to download anything longer than this.
+MAX_YOUTUBE_DURATION_SECONDS = 300  # 5 minutes
+
+
+def _match_filter(info_dict: dict, *, incomplete: bool) -> str | None:
+    """yt-dlp match_filter hook — called before any download begins.
+
+    Returning a non-None string causes yt-dlp to skip the video with that
+    message, which we turn into an HTTP 400 error in the caller.
+    """
+    duration = info_dict.get("duration")  # seconds, may be None for live streams
+    if duration is None:
+        return "Cannot determine video duration (may be a live stream)."
+    if duration > MAX_YOUTUBE_DURATION_SECONDS:
+        mins = MAX_YOUTUBE_DURATION_SECONDS // 60
+        return (
+            f"Video is {duration / 60:.1f} min long — "
+            f"only videos up to {mins} minutes are supported."
+        )
+    return None  # allow download
+
 
 def validate_youtube_url(url: str) -> None:
     parsed_url = urlparse(url)
@@ -48,6 +69,8 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
             "quiet": True,
             "no_warnings": True,
             "ffmpeg_location": ffmpeg_path,
+            # Abort before downloading if the video exceeds the duration cap.
+            "match_filter": _match_filter,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
@@ -58,6 +81,17 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
         }
 
         with yt_dlp.YoutubeDL(ydl_options) as ydl:
+            info = ydl.extract_info(url, download=False)  # metadata first
+            # match_filter runs during extract_info; check result before download
+            if info is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Video was rejected: could not retrieve metadata.",
+                )
+            skip_reason = _match_filter(info, incomplete=False)
+            if skip_reason:
+                raise HTTPException(status_code=400, detail=skip_reason)
+            # Metadata passed — proceed with download
             info = ydl.extract_info(url, download=True)
             title = info.get("title") or "youtube_audio"
 

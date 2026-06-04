@@ -71,3 +71,53 @@ def waveform_to_model_input_batch(waveforms: list[np.ndarray], sr: int = TARGET_
 def process_audio(audio_bytes: bytes) -> np.ndarray:
     y, sr = load_waveform(audio_bytes)
     return waveform_to_model_input(y, sr)
+
+
+def waveform_to_mel_profile_batch(
+    waveforms: list[np.ndarray],
+    sr: int = TARGET_SAMPLE_RATE,
+    n_buckets: int = 16,
+) -> list[list[float]]:
+    """Compute a compressed spectral energy profile for each waveform chunk.
+
+    Returns a (N_chunks × n_buckets) list of lists where each value is
+    0.0–1.0 (self-normalised per chunk so the profile shows spectral
+    *shape* rather than absolute loudness).
+
+    128 mel bands → 16 buckets (8 bands averaged per bucket).
+    Powers the frontend frequency-band heatmap — zero extra dependencies.
+    """
+    profiles: list[list[float]] = []
+    bucket_size = MEL_BANDS // n_buckets  # 128 // 16 = 8
+
+    for y in waveforms:
+        y = pad_or_trim_waveform(y)
+        mel = librosa.feature.melspectrogram(
+            y=y,
+            sr=sr,
+            n_mels=MEL_BANDS,
+            n_fft=N_FFT,
+            hop_length=HOP_LENGTH,
+            fmax=FMAX,
+            power=2.0,
+        )
+        # dB scale, average across time → shape (MEL_BANDS,)
+        mel_db = librosa.power_to_db(mel, ref=np.max)
+        band_energy = mel_db.mean(axis=1)
+
+        # Compress: average every bucket_size consecutive bands
+        compressed = np.array([
+            band_energy[i * bucket_size:(i + 1) * bucket_size].mean()
+            for i in range(n_buckets)
+        ])
+
+        # Min-max normalise per chunk → 0.0–1.0
+        lo, hi = compressed.min(), compressed.max()
+        if hi > lo:
+            norm = (compressed - lo) / (hi - lo)
+        else:
+            norm = np.zeros(n_buckets, dtype=np.float32)
+
+        profiles.append([round(float(v), 4) for v in norm])
+
+    return profiles
