@@ -319,30 +319,39 @@ function ConfidenceWaterfall({ chunkTimeline, selectedChunkIdx, onChunkClick }) 
                   <rect x={x - 1} y={PAD.top} width={barW + 2} height={chartH}
                     fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.5" rx="3" />
                 )}
-                {isHov && (() => {
-                  const ttX = Math.min(x - 20, SVG_W - PAD.right - 78)
-                  // Clamp tooltip so it never overflows the top of the SVG viewport
-                  const TT_H = 44
-                  const rawTtY = y - 52
-                  const ttY = rawTtY < PAD.top + 2 ? PAD.top + 2 : rawTtY
-                  return (
-                    <g>
-                      <rect x={ttX} y={ttY} width={76} height={TT_H} rx="8"
-                        fill="rgba(10,13,22,0.96)" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
-                      <text x={ttX + 38} y={ttY + 19} textAnchor="middle" fontSize="12"
-                        fontWeight="700" fontFamily="Inter, sans-serif" fill={color}>
-                        {chunk.score.toFixed(1)}%
-                      </text>
-                      <text x={ttX + 38} y={ttY + 36} textAnchor="middle" fontSize="9"
-                        fontFamily="Inter, sans-serif" fill="#64748b">
-                        {chunk.start_sec.toFixed(1)}–{chunk.end_sec.toFixed(1)}s
-                      </text>
-                    </g>
-                  )
-                })()}
               </g>
             )
           })}
+
+          {/* Render Tooltip ON TOP of all bars */}
+          {hovered !== null && chunkTimeline[hovered] && (() => {
+            const i = hovered
+            const chunk = chunkTimeline[i]
+            const x = PAD.left + i * spacing + (spacing - barW) / 2
+            const barH = Math.max(2, chartH * (chunk.score / 100))
+            const y = PAD.top + chartH - barH
+            const color = barColor(chunk.score)
+            
+            const ttX = Math.min(x - 20, SVG_W - PAD.right - 78)
+            const TT_H = 44
+            const rawTtY = y - 52
+            const ttY = rawTtY < PAD.top + 2 ? PAD.top + 2 : rawTtY
+            
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                <rect x={ttX} y={ttY} width={76} height={TT_H} rx="8"
+                  fill="rgba(10,13,22,0.96)" stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+                <text x={ttX + 38} y={ttY + 19} textAnchor="middle" fontSize="12"
+                  fontWeight="700" fontFamily="Inter, sans-serif" fill={color}>
+                  {chunk.score.toFixed(1)}%
+                </text>
+                <text x={ttX + 38} y={ttY + 36} textAnchor="middle" fontSize="9"
+                  fontFamily="Inter, sans-serif" fill="#64748b">
+                  {chunk.start_sec.toFixed(1)}–{chunk.end_sec.toFixed(1)}s
+                </text>
+              </g>
+            )
+          })()}
 
           {/* X-axis time labels */}
           {tickIndices.map(i => {

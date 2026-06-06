@@ -1,19 +1,19 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
 // ─── Constants — must match backend/app/audio_utils.py ───────────────────────
-const SR             = 16000
-const N_FFT          = 1024
-const HOP            = 512
-const N_MELS         = 128
-const FMAX           = 8000
+const SR = 16000
+const N_FFT = 1024
+const HOP = 512
+const N_MELS = 128
+const FMAX = 8000
 const TARGET_SAMPLES = 64000       // 4 s at 16 kHz
-const N_FRAMES       = Math.floor(TARGET_SAMPLES / HOP) + 1   // 126
+const N_FRAMES = Math.floor(TARGET_SAMPLES / HOP) + 1   // 126
 
 // ─── VAD tuning ──────────────────────────────────────────────────────────────
-const ENERGY_THRESH  = 0.012       // RMS threshold for speech vs. silence
-const SILENCE_MS     = 600         // consecutive silence before speech-end
-const MIN_SPEECH_MS  = 300         // ignore segments shorter than this
-const MAX_SPEECH_MS  = 4000        // hard cap — flush buffer at 4 s
+const ENERGY_THRESH = 0.005       // RMS threshold for speech vs. silence (lower = more sensitive)
+const SILENCE_MS = 600         // consecutive silence before speech-end
+const MIN_SPEECH_MS = 300         // ignore segments shorter than this
+const MAX_SPEECH_MS = 4000        // hard cap — flush buffer at 4 s
 
 // ─── Mel-scale helpers — librosa htk=False (Slaney) ──────────────────────────
 function _hzToMel(hz) {
@@ -64,10 +64,10 @@ function _inplaceFFT(re, im) {
       const half = len >> 1
       for (let j = 0; j < half; j++) {
         const h = i + j + half
-        const uRe = re[i+j], uIm = im[i+j]
-        const vRe = re[h]*wc - im[h]*ws, vIm = re[h]*ws + im[h]*wc
-        re[i+j] = uRe+vRe; im[i+j] = uIm+vIm; re[h] = uRe-vRe; im[h] = uIm-vIm
-        const nc = wc*wc0 - ws*ws0; ws = wc*ws0 + ws*wc0; wc = nc
+        const uRe = re[i + j], uIm = im[i + j]
+        const vRe = re[h] * wc - im[h] * ws, vIm = re[h] * ws + im[h] * wc
+        re[i + j] = uRe + vRe; im[i + j] = uIm + vIm; re[h] = uRe - vRe; im[h] = uIm - vIm
+        const nc = wc * wc0 - ws * ws0; ws = wc * ws0 + ws * wc0; wc = nc
       }
     }
   }
@@ -86,19 +86,19 @@ function computeMelSpec(audio) {
   const padded = new Float32Array(pLen)
   padded.set(y, pad)
   for (let i = 0; i < pad; i++) {
-    padded[pad - 1 - i]              = y[Math.min(i + 1, TARGET_SAMPLES - 1)]
+    padded[pad - 1 - i] = y[Math.min(i + 1, TARGET_SAMPLES - 1)]
     padded[pad + TARGET_SAMPLES + i] = y[Math.max(TARGET_SAMPLES - 2 - i, 0)]
   }
   const n_freqs = N_FFT / 2 + 1
   const nFrames = Math.floor((pLen - N_FFT) / HOP) + 1   // 126
-  const spec    = new Float32Array(N_MELS * nFrames)
+  const spec = new Float32Array(N_MELS * nFrames)
   const re = new Float32Array(N_FFT), im = new Float32Array(N_FFT)
   for (let f = 0; f < nFrames; f++) {
     const start = f * HOP
-    for (let i = 0; i < N_FFT; i++) { re[i] = padded[start+i] * HANN_WINDOW[i]; im[i] = 0 }
+    for (let i = 0; i < N_FFT; i++) { re[i] = padded[start + i] * HANN_WINDOW[i]; im[i] = 0 }
     _inplaceFFT(re, im)
     const pwr = new Float32Array(n_freqs)
-    for (let i = 0; i < n_freqs; i++) pwr[i] = re[i]*re[i] + im[i]*im[i]
+    for (let i = 0; i < n_freqs; i++) pwr[i] = re[i] * re[i] + im[i] * im[i]
     for (let m = 0; m < N_MELS; m++) {
       let e = 0; const filt = MEL_FILTERS[m]
       for (let k = 0; k < n_freqs; k++) e += filt[k] * pwr[k]
@@ -111,42 +111,40 @@ function computeMelSpec(audio) {
 // ─── Linear resampler: browser audio (44100/48000) → 16 kHz ─────────────────
 function resampleTo16k(data, fromSR) {
   if (fromSR === SR) return data.slice()
-  const ratio  = fromSR / SR
+  const ratio = fromSR / SR
   const newLen = Math.floor(data.length / ratio)
-  const out    = new Float32Array(newLen)
+  const out = new Float32Array(newLen)
   for (let i = 0; i < newLen; i++) {
     const src = i * ratio
-    const lo  = Math.floor(src)
-    const hi  = Math.min(lo + 1, data.length - 1)
-    out[i]    = data[lo] + (data[hi] - data[lo]) * (src - lo)
+    const lo = Math.floor(src)
+    const hi = Math.min(lo + 1, data.length - 1)
+    out[i] = data[lo] + (data[hi] - data[lo]) * (src - lo)
   }
   return out
 }
 
-// ─── ONNX Runtime — lazy dynamic import (avoids CJS/ESM build issues) ────────
-let _ort = null, _session = null
-
-async function getOrtRuntime() {
-  if (_ort) return _ort
-  _ort = await import('onnxruntime-web')
-  _ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/'
-  return _ort
-}
+// ─── ONNX Runtime — via global window.ort ─────────────────────────────────────
+let _session = null
 
 async function getOrtSession() {
   if (_session) return _session
-  const ort  = await getOrtRuntime()
-  _session   = await ort.InferenceSession.create('/models/echo_authentic_v1.onnx', {
+
+  const ort = window.ort
+  if (!ort) throw new Error('ONNX Runtime Web (ort) failed to load from CDN. Please check your network connection.')
+
+  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/'
+
+  _session = await ort.InferenceSession.create('/models/echo_authentic_v1_merged.onnx', {
     executionProviders: ['wasm'],
   })
   return _session
 }
 
 async function runInference(audio) {
-  const ort     = await getOrtRuntime()
+  const ort = window.ort
   const session = await getOrtSession()
-  const spec    = computeMelSpec(audio)
-  const tensor  = new ort.Tensor('float32', spec, [1, 1, N_MELS, N_FRAMES])
+  const spec = computeMelSpec(audio)
+  const tensor = new ort.Tensor('float32', spec, [1, 1, N_MELS, N_FRAMES])
   const outputs = await session.run({ [session.inputNames[0]]: tensor })
   return outputs[session.outputNames[0]].data[0]
 }
@@ -159,54 +157,54 @@ function LiveGauge({ score }) {
   const col = pct < 30 ? '#10b981' : pct < 90 ? '#f59e0b' : '#f43f5e'
   return (
     <svg viewBox="0 0 220 145" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', overflow: 'visible' }}>
-      <path d={`M ${CX-R},${CY} A ${R},${R} 0 0,1 ${CX+R},${CY}`}
+      <path d={`M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`}
         fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="14" strokeLinecap="round" />
-      <path d={`M ${CX-R},${CY} A ${R},${R} 0 0,1 ${CX+R},${CY}`}
+      <path d={`M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`}
         fill="none" stroke={col} strokeWidth="14" strokeLinecap="round"
         strokeDasharray={AL} strokeDashoffset={off}
         style={{ transition: 'stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1), stroke 0.4s ease', filter: `drop-shadow(0 0 10px ${col}90)` }}
       />
-      <text x="110" y="97"  textAnchor="middle" fontSize="27" fontWeight="800" fill="#f8fafc" fontFamily="Inter,sans-serif">{pct.toFixed(1)}%</text>
-      <text x="110" y="116" textAnchor="middle" fontSize="9"  fill="#475569" fontFamily="Inter,sans-serif" letterSpacing="0.14em">AI PROBABILITY</text>
-      <text x="26"  y={CY+20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter,sans-serif">0%</text>
-      <text x="194" y={CY+20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter,sans-serif">100%</text>
+      <text x="110" y="97" textAnchor="middle" fontSize="27" fontWeight="800" fill="#f8fafc" fontFamily="Inter,sans-serif">{pct.toFixed(1)}%</text>
+      <text x="110" y="116" textAnchor="middle" fontSize="9" fill="#475569" fontFamily="Inter,sans-serif" letterSpacing="0.14em">AI PROBABILITY</text>
+      <text x="26" y={CY + 20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter,sans-serif">0%</text>
+      <text x="194" y={CY + 20} textAnchor="middle" fontSize="8" fill="#334155" fontFamily="Inter,sans-serif">100%</text>
     </svg>
   )
 }
 
 // ─── LiveMicDetection ─────────────────────────────────────────────────────────
 export default function LiveMicDetection() {
-  const [status,  setStatus]  = useState('idle')
-  const [score,   setScore]   = useState(null)
+  const [status, setStatus] = useState('idle')
+  const [score, setScore] = useState(null)
   const [history, setHistory] = useState([])
-  const [error,   setError]   = useState('')
-  const [active,  setActive]  = useState(false)
+  const [error, setError] = useState('')
+  const [active, setActive] = useState(false)
 
   // Audio refs (mutable, no re-render needed)
-  const audioCtxRef    = useRef(null)
-  const streamRef      = useRef(null)
-  const processorRef   = useRef(null)
-  const analyserRef    = useRef(null)
-  const canvasRef      = useRef(null)
-  const animFrameRef   = useRef(null)
+  const audioCtxRef = useRef(null)
+  const streamRef = useRef(null)
+  const processorRef = useRef(null)
+  const analyserRef = useRef(null)
+  const canvasRef = useRef(null)
+  const animFrameRef = useRef(null)
 
   // VAD state (in refs to avoid stale closure inside onaudioprocess)
-  const isActiveRef      = useRef(false)
-  const vadStateRef      = useRef('idle')   // idle | listening | collecting
-  const speechBufRef     = useRef([])
-  const speechStartRef   = useRef(0)
-  const silenceStartRef  = useRef(null)
+  const isActiveRef = useRef(false)
+  const vadStateRef = useRef('idle')   // idle | listening | collecting
+  const speechBufRef = useRef([])
+  const speechStartRef = useRef(0)
+  const silenceStartRef = useRef(null)
 
   // ── Waveform oscilloscope ───────────────────────────────────────────────────
   const drawWaveform = useCallback(() => {
-    const canvas   = canvasRef.current
+    const canvas = canvasRef.current
     const analyser = analyserRef.current
     if (!canvas || !analyser) return
 
-    const ctx    = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d')
     const W = canvas.width, H = canvas.height
     const bufLen = analyser.frequencyBinCount
-    const data   = new Uint8Array(bufLen)
+    const data = new Uint8Array(bufLen)
     analyser.getByteTimeDomainData(data)
 
     ctx.clearRect(0, 0, W, H)
@@ -214,17 +212,17 @@ export default function LiveMicDetection() {
     // Centre line
     ctx.strokeStyle = 'rgba(255,255,255,0.05)'
     ctx.lineWidth = 1
-    ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke()
 
     // Waveform
     const grad = ctx.createLinearGradient(0, 0, W, 0)
-    grad.addColorStop(0,   '#7c3aed')
+    grad.addColorStop(0, '#7c3aed')
     grad.addColorStop(0.5, '#3b82f6')
-    grad.addColorStop(1,   '#7c3aed')
+    grad.addColorStop(1, '#7c3aed')
     ctx.strokeStyle = grad
     ctx.lineWidth = 2.5
     ctx.shadowColor = '#3b82f680'
-    ctx.shadowBlur  = 6
+    ctx.shadowBlur = 6
     ctx.beginPath()
     const sw = W / bufLen
     for (let i = 0; i < bufLen; i++) {
@@ -246,11 +244,11 @@ export default function LiveMicDetection() {
       processorRef.current = null
     }
     if (analyserRef.current) { analyserRef.current.disconnect(); analyserRef.current = null }
-    if (streamRef.current)   { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
-    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null }
-    vadStateRef.current   = 'idle'
-    speechBufRef.current  = []
-    isActiveRef.current   = false
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
+    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => { }); audioCtxRef.current = null }
+    vadStateRef.current = 'idle'
+    speechBufRef.current = []
+    isActiveRef.current = false
     silenceStartRef.current = null
   }, [])
 
@@ -287,16 +285,21 @@ export default function LiveMicDetection() {
       const modelPromise = getOrtSession()
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        },
       })
       streamRef.current = stream
       await modelPromise   // ensure model is ready before we start collecting
 
-      const audioCtx   = new AudioContext()
+      const audioCtx = new AudioContext()
       audioCtxRef.current = audioCtx
       const sampleRate = audioCtx.sampleRate   // 44100 or 48000 typically
 
-      const source  = audioCtx.createMediaStreamSource(stream)
+      const source = audioCtx.createMediaStreamSource(stream)
 
       // Analyser for oscilloscope
       const analyser = audioCtx.createAnalyser()
@@ -305,7 +308,7 @@ export default function LiveMicDetection() {
       analyserRef.current = analyser
 
       // ScriptProcessorNode for raw PCM (deprecated but universally supported)
-      const PROC_BUF  = 4096
+      const PROC_BUF = 4096
       const processor = audioCtx.createScriptProcessor(PROC_BUF, 1, 1)
       processorRef.current = processor
 
@@ -313,7 +316,12 @@ export default function LiveMicDetection() {
       const silence = audioCtx.createGain()
       silence.gain.value = 0
 
-      source.connect(analyser)
+      // Pre-amplifier: Boost quiet microphone audio by 2.5x (+8 dB)
+      const preamp = audioCtx.createGain()
+      preamp.gain.value = 2.5
+      
+      source.connect(preamp)
+      preamp.connect(analyser)
       analyser.connect(processor)
       processor.connect(silence)
       silence.connect(audioCtx.destination)
@@ -327,13 +335,13 @@ export default function LiveMicDetection() {
         // RMS energy
         let sq = 0
         for (let i = 0; i < input.length; i++) sq += input[i] * input[i]
-        const rms      = Math.sqrt(sq / input.length)
+        const rms = Math.sqrt(sq / input.length)
         const isSpeech = rms > ENERGY_THRESH
-        const now      = performance.now()
+        const now = performance.now()
 
         if (vadStateRef.current === 'listening') {
           if (isSpeech) {
-            vadStateRef.current  = 'collecting'
+            vadStateRef.current = 'collecting'
             speechStartRef.current = now
             speechBufRef.current = [input.slice()]
             silenceStartRef.current = null
@@ -375,7 +383,8 @@ export default function LiveMicDetection() {
       drawWaveform()
 
     } catch (err) {
-      const msg = err?.message || ''
+      console.error('[LiveMic] Init error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
       setError(
         msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('denied')
           ? 'Microphone access denied. Allow mic access in your browser settings and try again.'
@@ -399,9 +408,9 @@ export default function LiveMicDetection() {
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const verdict = score === null ? null
-    : score < 30 ? { text: '🟢 Human Voice',  cls: 'human' }
-    : score < 90 ? { text: '🟡 Uncertain',     cls: 'uncertain' }
-    :              { text: '🔴 AI-Generated',   cls: 'ai' }
+    : score < 30 ? { text: '🟢 Human Voice', cls: 'human' }
+      : score < 90 ? { text: '🟡 Uncertain', cls: 'uncertain' }
+        : { text: '🔴 AI-Generated', cls: 'ai' }
 
   const avgScore = history.length ? history.reduce((a, b) => a + b, 0) / history.length : null
 
@@ -456,9 +465,9 @@ export default function LiveMicDetection() {
             </svg>
           ) : (
             <svg viewBox="0 0 24 24" fill="currentColor" width="30" height="30" aria-hidden="true">
-              <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4z"/>
-              <path d="M19 12a7 7 0 0 1-14 0H3a9 9 0 0 0 18 0h-2z"/>
-              <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4z" />
+              <path d="M19 12a7 7 0 0 1-14 0H3a9 9 0 0 0 18 0h-2z" />
+              <line x1="12" y1="21" x2="12" y2="23" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           )}
         </button>
@@ -484,8 +493,8 @@ export default function LiveMicDetection() {
             {status === 'speaking'
               ? '🎤 Voice detected — will analyse when you pause'
               : status === 'analysing'
-              ? '🧠 Analysing…'
-              : '👂 Waiting for speech…'}
+                ? '🧠 Analysing…'
+                : '👂 Waiting for speech…'}
           </span>
         </div>
       )}
@@ -540,7 +549,7 @@ export default function LiveMicDetection() {
               {history.map((s, i) => {
                 const col = s < 30 ? '#10b981' : s < 90 ? '#f59e0b' : '#f43f5e'
                 return (
-                  <div key={i} className="live-spark-col" title={`Segment ${i+1}: ${s.toFixed(1)}%`}>
+                  <div key={i} className="live-spark-col" title={`Segment ${i + 1}: ${s.toFixed(1)}%`}>
                     <div className="live-spark-bar-bg">
                       <div className="live-spark-bar-fill"
                         style={{ height: `${Math.max(s, 3)}%`, background: col, boxShadow: `0 0 6px ${col}50` }} />
