@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsndfile1 \
     git \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --chown=user backend/requirements.txt $HOME/app/
