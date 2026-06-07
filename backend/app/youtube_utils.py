@@ -71,6 +71,7 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
             "ffmpeg_location": ffmpeg_path,
             "legacyserverconnect": True,
             "source_address": "0.0.0.0",
+            "impersonate": "chrome",
             "extractor_args": {"youtube": {"player_client": ["android"]}},
             # Abort before downloading if the video exceeds the duration cap.
             "match_filter": _match_filter,
@@ -82,6 +83,14 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
                 }
             ],
         }
+
+        # Securely handle cookies if provided via Hugging Face Secrets
+        cookies_env = os.environ.get("YOUTUBE_COOKIES")
+        if cookies_env:
+            cookies_path = os.path.join(temp_dir, "cookies.txt")
+            with open(cookies_path, "w") as f:
+                f.write(cookies_env)
+            ydl_options["cookiefile"] = cookies_path
 
         with yt_dlp.YoutubeDL(ydl_options) as ydl:
             info = ydl.extract_info(url, download=False)  # metadata first
