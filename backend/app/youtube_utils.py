@@ -70,7 +70,7 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
             "ffmpeg_location": ffmpeg_path,
             "legacyserverconnect": True,
             "source_address": "0.0.0.0",
-            "extractor_args": {"youtube": {"player_client": ["ios"]}},
+            "extractor_args": {"youtube": {"player_client": ["mweb", "android"]}},
             "match_filter": _match_filter,
             "postprocessors": [
                 {
