@@ -10,3 +10,4 @@ imageio-ffmpeg
 silero-vad
 matplotlib
 curl-cffi
+yt-dlp-getpot-wpc
