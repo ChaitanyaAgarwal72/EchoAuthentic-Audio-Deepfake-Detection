@@ -410,9 +410,13 @@ async def predict_youtube_stream(
             yield sse({"stage": "done", "pct": 100, "result": result})
 
         except HTTPException as exc:
+            import traceback
+            traceback.print_exc()
             yield sse({"stage": "error", "message": exc.detail})
         except Exception as exc:
-            yield sse({"stage": "error", "message": str(exc)})
+            import traceback
+            traceback.print_exc()
+            yield sse({"stage": "error", "message": str(exc) if str(exc) else "Unknown internal error"})
 
     return StreamingResponse(
         event_stream(),
