@@ -9,5 +9,3 @@ yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git
 imageio-ffmpeg
 silero-vad
 matplotlib
-curl-cffi
-yt-dlp-getpot-wpc

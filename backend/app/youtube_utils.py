@@ -61,16 +61,14 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
 
         ydl_options = {
-            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "format": "bestaudio/best",
             "outtmpl": output_template,
             "noplaylist": True,
-            "quiet": False,
-            "verbose": True,
-            "no_warnings": False,
+            "quiet": True,
+            "no_warnings": True,
             "ffmpeg_location": ffmpeg_path,
             "legacyserverconnect": True,
             "source_address": "0.0.0.0",
-            "extractor_args": {"youtube": {"player_client": ["mweb"]}},
             "match_filter": _match_filter,
             "postprocessors": [
                 {
@@ -80,18 +78,6 @@ def download_youtube_audio(url: str) -> tuple[bytes, str]:
                 }
             ],
         }
-
-        # Securely handle cookies if provided via Hugging Face Secrets
-        cookies_env = os.environ.get("YOUTUBE_COOKIES")
-        if cookies_env:
-            print(f"[DEBUG] Found YOUTUBE_COOKIES secret with length: {len(cookies_env)}")
-            cookies_path = os.path.join(temp_dir, "cookies.txt")
-            with open(cookies_path, "w") as f:
-                f.write(cookies_env)
-            ydl_options["cookiefile"] = cookies_path
-            print(f"[DEBUG] Successfully wrote cookies to temporary file: {cookies_path}")
-        else:
-            print("[DEBUG] WARNING: YOUTUBE_COOKIES secret NOT found in the environment!")
 
         with yt_dlp.YoutubeDL(ydl_options) as ydl:
             info = ydl.extract_info(url, download=False)  # metadata first

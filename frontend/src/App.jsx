@@ -30,6 +30,9 @@ function App() {
   const abortControllerRef = useRef(null)
 
   const apiBaseUrl = useMemo(() => import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000', [])
+  const isDeployed = useMemo(() => {
+    return window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+  }, [])
 
   const predictionLabel = result?.prediction || result?.binary_prediction
   const isAi = predictionLabel === 'AI-Generated'
@@ -171,11 +174,18 @@ function App() {
           </div>
 
           {mode === 'youtube' ? (
-            <label className="field" htmlFor="youtube-url">
-              <span>YouTube URL</span>
-              <input id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..."
-                value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} />
-            </label>
+            <div className="youtube-input-group">
+              {isDeployed && (
+                <div className="cloud-warning" style={{ backgroundColor: '#451a03', color: '#fde047', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '0.9rem', border: '1px solid #713f12', lineHeight: '1.4' }}>
+                  <strong>⚠️ Feature Disabled in Live Demo:</strong> YouTube strictly blocks extraction from datacenter IPs like Hugging Face. To use this feature, please clone the repository and run it locally.
+                </div>
+              )}
+              <label className="field" htmlFor="youtube-url">
+                <span>YouTube URL</span>
+                <input id="youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=..."
+                  value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} disabled={isDeployed} />
+              </label>
+            </div>
           ) : mode === 'upload' ? (
             <label className="field" htmlFor="audio-file">
               <span>Supported formats: .wav, .mp3, .flac (max 50MB)</span>
@@ -184,7 +194,7 @@ function App() {
           ) : null}
 
           {mode !== 'live' && (
-            <button id="predict-btn" type="submit" className="predict-button" disabled={isSubmitting}>
+            <button id="predict-btn" type="submit" className="predict-button" disabled={isSubmitting || (mode === 'youtube' && isDeployed)}>
               {isSubmitting ? <span className="btn-inner"><span className="spinner" aria-hidden="true" />Analysing…</span> : 'Run Detection'}
             </button>
           )}
