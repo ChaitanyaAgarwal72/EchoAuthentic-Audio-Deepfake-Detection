@@ -1,3 +1,11 @@
+---
+title: Echo Authentic API
+emoji: 🎙️
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
 # EchoAuthentic - Audio Deepfake Detection
 
 EchoAuthentic is a web application designed to detect AI-generated speech. It provides a full-stack solution featuring:

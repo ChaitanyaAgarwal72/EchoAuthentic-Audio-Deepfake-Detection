@@ -33,7 +33,6 @@ app = FastAPI(title="EchoAuthentic Voice Spoofing API")
 
 import os
 
-# Define allowed origins
 allowed_origins = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000"]
 frontend_url = os.environ.get("FRONTEND_URL")
 if frontend_url:
