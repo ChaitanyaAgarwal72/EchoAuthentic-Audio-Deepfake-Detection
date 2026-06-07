@@ -173,12 +173,16 @@ function LiveGauge({ score }) {
 }
 
 // ─── LiveMicDetection ─────────────────────────────────────────────────────────
-export default function LiveMicDetection() {
+export default function LiveMicDetection({ onActiveChange }) {
   const [status, setStatus] = useState('idle')
   const [score, setScore] = useState(null)
   const [history, setHistory] = useState([])
   const [error, setError] = useState('')
   const [active, setActive] = useState(false)
+
+  useEffect(() => {
+    onActiveChange?.(active)
+  }, [active, onActiveChange])
 
   // Audio refs (mutable, no re-render needed)
   const audioCtxRef = useRef(null)

@@ -57,23 +57,18 @@ ALLOWED_YOUTUBE_HOSTNAMES = {
     'youtu.be',
 }
 
-# ── Audio limits ──────────────────────────────────────────────────────────────
-MAX_FILE_SIZE_BYTES      = 50 * 1024 * 1024   # 50 MB hard cap for uploads
-MAX_AUDIO_DURATION_SEC   = 300.0              # 5 minutes — both upload and YouTube
-MIN_AUDIO_DURATION_SEC   = 2.0               # shorter than this gets a soft warning
+MAX_FILE_SIZE_BYTES      = 50 * 1024 * 1024
+MAX_AUDIO_DURATION_SEC   = 300.0
+MIN_AUDIO_DURATION_SEC   = 2.0
 
 try:
     _sess_opts = ort.SessionOptions()
-    # Suppress benign shape-mismatch warnings that appear when batching chunks
-    # (model exported with static batch=1 but we run variable batch sizes).
-    # 0=Verbose 1=Info 2=Warning 3=Error 4=Fatal
     _sess_opts.log_severity_level = 3
     ort_session = ort.InferenceSession(MODEL_PATH, sess_options=_sess_opts)
     print("ONNX Model loaded successfully into memory.")
 except Exception as e:
     print(f"Error loading ONNX model: {e}")
 
-# ── In-memory audio cache (stores the last analysed waveform for chunk playback) ──
 _audio_cache: dict = {"waveform": None, "sr": None}
 
 
@@ -201,12 +196,10 @@ async def predict_audio(
         audio_bytes = await file.read()
         validate_file_size(audio_bytes)
         waveform, sample_rate = load_waveform(audio_bytes)
-        # Cache for chunk playback
         _audio_cache["waveform"] = waveform
         _audio_cache["sr"] = sample_rate
         duration_warning = validate_audio_duration(waveform, sample_rate)
 
-        # Run inference and spectrogram generation concurrently
         with ThreadPoolExecutor(max_workers=2) as pool:
             inference_future = pool.submit(
                 analyze_waveform_pipeline,
@@ -300,8 +293,6 @@ async def predict_youtube(
         raise HTTPException(status_code=500, detail=f"An error occurred while processing the YouTube link: {str(e)}")
 
 
-# ── Streaming SSE endpoint for YouTube (shows per-stage progress) ─────────────
-
 @app.post("/predict/youtube/stream/")
 async def predict_youtube_stream(
     request: YouTubeRequest,
@@ -325,38 +316,31 @@ async def predict_youtube_stream(
 
             yield sse({"stage": "downloading", "label": "Downloading audio from YouTube…", "pct": 5})
 
-            # 1. Download
             audio_bytes, filename = await asyncio.to_thread(
                 download_youtube_audio_shared, request.url
             )
 
             yield sse({"stage": "loading", "label": "Loading and resampling audio…", "pct": 32})
 
-            # 2. Load waveform
             waveform, sample_rate = await asyncio.to_thread(load_waveform, audio_bytes)
 
-            # Duration guard — runs synchronously (just arithmetic, no I/O)
             duration_warning = validate_audio_duration(waveform, sample_rate)
 
-            # Cache waveform for chunk playback
             _audio_cache["waveform"] = waveform
             _audio_cache["sr"] = sample_rate
 
             yield sse({"stage": "vad", "label": "Detecting speech segments (VAD)…", "pct": 48})
 
-            # 3. VAD
             speech_waveform, vad_summary = await asyncio.to_thread(
                 pipeline_apply_vad_to_waveform, waveform, sample_rate, vad_threshold
             )
 
-            # 4. Chunk (fast — no yield needed)
             chunks, offsets = split_overlapping_chunks_with_offsets(
                 speech_waveform, sample_rate, chunk_size_seconds, chunk_overlap_seconds
             )
 
             yield sse({"stage": "inference", "label": f"Running AI analysis on {len(chunks)} chunks…", "pct": 62})
 
-            # 5. Inference + spectrogram + mel profiles — all concurrent
             inference_task    = asyncio.to_thread(pipeline_score_waveforms, ort_session, chunks)
             spectrogram_task  = asyncio.to_thread(generate_spectrogram_b64, waveform, sample_rate)
             mel_task          = asyncio.to_thread(waveform_to_mel_profile_batch, chunks)
@@ -367,7 +351,6 @@ async def predict_youtube_stream(
 
             spectrogram_b64, chunk_mel_profiles = await asyncio.gather(spectrogram_task, mel_task)
 
-            # 6. Summarise
             summary = pipeline_summarize_scores(
                 chunk_scores,
                 human_max=confidence_low,
@@ -434,8 +417,6 @@ async def predict_youtube_stream(
         },
     )
 
-
-# ── Lightweight segment-playback endpoint ────────────────────────────────────
 
 @app.get("/audio/segment/")
 async def get_audio_segment(
