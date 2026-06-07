@@ -17,4 +17,4 @@ jobs:
       - name: Push to hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: huggingface-cli upload genAI71/echo-authentic-api . . --repo-type space
+        run: hf upload genAI71/echo-authentic-api . . --repo-type space
